@@ -1,9 +1,13 @@
 #!/usr/bin/env bash
-# Replay every input in a crashes/ dir and group by crash signature.
+# Replay every input in a crashes/ dir and group by crash signature, with the
+# time each signature was first found (crash file mtime relative to the run's
+# first stats.csv row). Distinct real bugs and time-to-first-find per bug are
+# the numbers that compare modes.
 # Usage: scripts/triage.sh <target> <mode> <crashes-dir> [timeout-secs]
 set -uo pipefail
 bin="$(dirname "$0")/../target/release/$1"; mode="$2"; dir="$3"; t="${4:-20}"
-declare -A count example
+declare -A count example first
+start_ms="$(sed -n 2p "$dir/../stats.csv" 2>/dev/null | cut -d, -f1)"
 for f in "$dir"/*; do
   case "$f" in *.metadata|*.lafl_lock|*/.*) continue ;; esac
   [[ -f "$f" ]] || continue
@@ -19,5 +23,10 @@ for f in "$dir"/*; do
   fi
   count["$sig"]=$(( ${count["$sig"]:-0} + 1 ))
   : "${example["$sig"]:=$f}"
+  t_ms=$(( $(stat -c %Y "$f") * 1000 ))
+  if [[ -z "${first["$sig"]:-}" || $t_ms -lt ${first["$sig"]} ]]; then first["$sig"]=$t_ms; example["$sig"]=$f; fi
 done
-for s in "${!count[@]}"; do printf "%5d  %s\n       e.g. %s\n" "${count[$s]}" "$s" "${example[$s]}"; done | sort -rn
+for s in "${!count[@]}"; do
+  ttf="?"; [[ -n "$start_ms" ]] && ttf="$(( (${first[$s]} - start_ms) / 1000 ))s"
+  printf "first@%-8s x%-5d %s  [%s]\n" "$ttf" "${count[$s]}" "$s" "${example[$s]}"
+done | sort -t@ -k2 -n
