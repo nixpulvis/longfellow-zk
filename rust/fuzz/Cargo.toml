@@ -1,0 +1,36 @@
+[package]
+name = "longfellow-fuzz"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# Standalone workspace so the main workspace (and its CI) never builds LibAFL.
+[workspace]
+
+[dependencies]
+libafl = { version = "0.16.1", default-features = false, features = ["std", "derive", "nautilus", "prelude", "fork"] }
+libafl_bolts = { version = "0.16.1" }
+libafl_targets = { version = "0.16.1", features = ["sancov_8bit", "sancov_cmplog", "observers"] }
+arbitrary = { version = "1", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+clap = { version = "4", features = ["derive"] }
+zstd = "0.13"
+sha2 = "0.10"
+
+core-proto = { path = "../core/proto" }
+core-algebra = { path = "../core/algebra" }
+runtime-algebra = { path = "../runtime/algebra" }
+runtime-proto = { path = "../runtime/proto" }
+runtime-random = { path = "../runtime/random", features = ["testonly"] }
+runtime-zk = { path = "../runtime/zk" }
+mdoc-zk-circuits = { path = "../applications/mdoc_zk/circuits" }
+mdoc-zk-runtime = { path = "../applications/mdoc_zk/runtime" }
+mdoc-zk-testcases = { path = "../applications/mdoc_zk/testcases" }
+mdoc-zk-artifacts = { path = "../applications/mdoc_zk/artifacts" }
+
+[profile.release]
+opt-level = 3
+debug = 1
+panic = "abort"
+codegen-units = 16
+lto = false
