@@ -1,5 +1,6 @@
 //! LibAFL fuzzers for longfellow-zk. See README.md.
 
+pub mod alloc_limit;
 pub mod circasm;
 pub mod edn;
 pub mod fixtures;

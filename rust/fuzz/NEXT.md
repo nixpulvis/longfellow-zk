@@ -38,19 +38,32 @@ get through the parser, which is what a grammar is for.
    - Done: `nautilus` mode (grammar plus assembler), alongside `bytes`.
    - Done: an archive that parses has its `sig` and `hash` entries read as
      circuits, as `decompress_circuits` does. This applies to bytes mode too.
-   - For both modes, after a successful parse also run `compute_id` and the
-     verifier's geometry step (`ZkVerifier::new(..).geometry(..)`), which is
-     what the verifier does with a loaded circuit before it reads a proof.
-     The grammar keeps `npublic_input <= ninput` in the common case, which
-     `geometry` asserts.
-   - Cap fuzzer memory so allocation failures become crashes in both modes,
-     instead of quietly exhausting RAM. The LFA2 payload-length bug and the
-     LFC2 pre-allocation issue are both allocation problems.
-   - Seed bytes mode with LFA2 artifacts only. LFA1 decompresses to ~88 MB
-     and made each execution take seconds.
+   - Done: after a successful parse, both modes run `compute_id` and the
+     verifier's geometry step (`ZkVerifier::new(..).geometry(..)`, with the
+     current spec's Ligero configs). Correction to the earlier plan: the
+     verifier runs `geometry` but not `compute_id`; `compute_id` runs on a
+     loaded circuit when a reader is asked to enforce the ID (the circuit
+     eval tool, tests). It is kept because it walks every term, which nothing
+     else in the harness does. Both are generic, so they are monomorphized
+     into the instrumented harness binary and get coverage and overflow
+     checks; non-generic helpers such as `LigeroParam::sanity` do not.
+   - Done: `src/alloc_limit.rs` aborts any single allocation over
+     `LF_FUZZ_MALLOC_LIMIT_MB` (default 2048, 0 for none), like libFuzzer's
+     `-malloc_limit_mb`, with the usual "memory allocation of N bytes failed"
+     message. The LFA2 payload-length bug crashes the same way on any
+     machine. The LFC2 pre-allocation stays under the default (its largest
+     single vector is 20M deltas, about 320 MB), so it shows up only with a
+     lower limit.
+   - Done: bytes mode is seeded with LFA2 artifacts only.
+   - Cost: `compute_id` hashes every term, about 1.8 s for the real archive,
+     which put inputs derived from the seed near the 2 s timeout and
+     produced spurious timeouts. The `circuit` target now defaults to a 10 s
+     timeout (`Target::timeout_ms`; `--timeout-ms` still overrides). Seeded
+     bytes mode runs at about 300 execs/s instead of 730; the grammar's small
+     inputs are unaffected (about 880/s).
 
-4. **Race.** A first one is done (below); what's left is a longer one once
-   the step 3 harness work is in.
+4. **Race.** A first one is done (below), before the geometry step and the
+   allocation limit. What's left is a longer one on the step 3 harness.
 
 ### First race (20 min, 3 trials per config, one core each)
 

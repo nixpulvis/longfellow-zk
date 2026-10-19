@@ -97,9 +97,9 @@ pub struct Cli {
     /// RNG seed (defaults to the current time).
     #[arg(long)]
     pub seed: Option<u64>,
-    /// Per-execution timeout.
-    #[arg(long, default_value_t = 2000)]
-    pub timeout_ms: u64,
+    /// Per-execution timeout [default: the target's, 2000 unless it sets one].
+    #[arg(long)]
+    pub timeout_ms: Option<u64>,
     /// Ignore the target's seed corpus and start from generated inputs.
     #[arg(long)]
     pub no_seeds: bool,
@@ -138,6 +138,9 @@ pub struct Target {
     /// Called once before forking, to build expensive fixtures so that
     /// restarted children inherit them.
     pub setup: fn(),
+    /// Default per-execution timeout, for targets whose ordinary inputs are
+    /// slow. `--timeout-ms` overrides it.
+    pub timeout_ms: u64,
 }
 
 impl Default for Target {
@@ -150,12 +153,14 @@ impl Default for Target {
             seeds: Vec::new,
             tokens: Vec::new,
             setup: || {},
+            timeout_ms: 2000,
         }
     }
 }
 
 pub fn main(target: Target) {
-    let cli = Cli::parse();
+    let mut cli = Cli::parse();
+    cli.timeout_ms.get_or_insert(target.timeout_ms);
 
     if cli.dump_grammar {
         let (grammar, _) = target.nautilus.expect("this target has no grammar");
@@ -405,7 +410,7 @@ fn fuzz_bytes(
         harness_fn(buf.as_slice());
         ExitKind::Ok
     };
-    let timeout = Duration::from_millis(cli.timeout_ms);
+    let timeout = Duration::from_millis(cli.timeout_ms.unwrap());
     let stats = StatsStage::<BytesInput>::new(dir, cli, start, total_edges());
     let mutator = HavocScheduledMutator::new(havoc_mutations().merge(tokens_mutations()));
 
@@ -517,7 +522,7 @@ fn fuzz_nautilus(
         &mut fuzzer,
         &mut state,
         &mut mgr,
-        Duration::from_millis(cli.timeout_ms),
+        Duration::from_millis(cli.timeout_ms.unwrap()),
     )?;
 
     if state.corpus().count() == 0 {

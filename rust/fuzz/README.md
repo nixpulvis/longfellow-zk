@@ -31,6 +31,9 @@ only, in every mode. The comments in the wrapper explain why the verifier
 crates are excluded (instrumenting them made one verification 5× slower).
 `LF_FUZZ_INSTRUMENT=all` and `LF_FUZZ_CHECKS=off` change those defaults;
 `LF_FUZZ_ASAN=1` adds AddressSanitizer via `RUSTC_BOOTSTRAP`.
+The `circuit` target also aborts on any single allocation over
+`LF_FUZZ_MALLOC_LIMIT_MB` (default 2048; 0 turns it off), so untrusted sizes
+crash the same way regardless of how much memory the machine has.
 
 Unit tests for the assembler and grammars (`cargo test --release --lib`) run
 without instrumentation. Use a separate target dir:
@@ -42,7 +45,7 @@ without instrumentation. Use a separate target dir:
 |---|---|---|---|
 | `cbor` | `CborParser::parse_exact` (host CBOR) | bytes, bytes-cmplog, nautilus | none |
 | `mdoc` | `parse_mdoc` (prover-side mdoc parsing) | bytes, bytes-cmplog, nautilus | offsets/lengths in the result stay in bounds (`src/mdoc_props.rs`) |
-| `circuit` | `CircuitArchive::from_bytes` (then its `sig`/`hash` entries), `CircuitReader` LFC1/LFC2 | bytes, bytes-cmplog, nautilus | none |
+| `circuit` | `CircuitArchive::from_bytes` (then its `sig`/`hash` entries), `CircuitReader` LFC1/LFC2, then `compute_id` and the verifier's `geometry` on each circuit that parses | bytes, bytes-cmplog, nautilus | allocations over 2 GB abort |
 | `proof` | `MdocProof::read` with a real circuit's geometry | bytes, bytes-cmplog | accepted proofs re-encode to the same bytes (no malleability) |
 | `verify` | `run_mdoc_verifier`, fixed circuit/key/transcript/attrs | bytes, arbitrary | any accepted proof that differs from the honest one |
 
