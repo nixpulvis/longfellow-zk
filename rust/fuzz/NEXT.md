@@ -49,10 +49,31 @@ get through the parser, which is what a grammar is for.
    - Seed bytes mode with LFA2 artifacts only. LFA1 decompresses to ~88 MB
      and made each execution take seconds.
 
-4. **Race.** Bytes and grammar on equal cores and equal time, fully detached:
-   background jobs in this environment stop at 2 hours, and an earlier run
-   lost its Nautilus process that way. Score each run with
-   `scripts/triage.sh`, which groups crashes by signature and reports when
-   each was first found. The comparison is distinct real bugs per mode and
-   time to first find for each. One trial is an anecdote; repeat trials
-   separate luck from a real edge.
+4. **Race.** A first one is done (below); what's left is a longer one once
+   the step 3 harness work is in.
+
+### First race (20 min, 3 trials per config, one core each)
+
+`JOBS=4 scripts/run-matrix.sh circuit 1200 3`, before the geometry step and
+the memory cap. Times are first finds from `scripts/triage.sh`, per trial.
+
+| config | edges (median) | execs/s | #1 zero noutput | #3 LFA2 payload length |
+|---|---|---|---|---|
+| nautilus (no seeds) | 1236 | 883 | 0s, 0s, 0s | 3s, 2s, 7s |
+| bytes (seeded) | 1149 | 733 | 1s, 2s, 1s | 326s, 430s, 109s |
+| bytes-cmplog (seeded) | 933 | 162 | 167s, 120s, 116s | never, 184s, 1124s |
+| bytes, no seeds | 353 | 2717 | 0s, 0s, 0s | never in 3 trials |
+
+The grammar finds #3 about 50x sooner than seeded bytes, with more
+coverage in every trial and a higher execution rate (the seeded runs spend
+time in the 1.5 MB archive seed). Bytes from scratch runs fastest but stays
+at the headers. No run found anything beyond the two known bugs, so the open
+question is still whether either mode finds new bugs past the parser.
+
+The plan for the race: Bytes and grammar on equal cores and equal time, fully detached:
+background jobs in this environment stop at 2 hours, and an earlier run
+lost its Nautilus process that way. Score each run with
+`scripts/triage.sh`, which groups crashes by signature and reports when
+each was first found. The comparison is distinct real bugs per mode and
+time to first find for each. One trial is an anecdote; repeat trials
+separate luck from a real edge.
