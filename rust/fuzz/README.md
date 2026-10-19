@@ -105,6 +105,25 @@ a subtree runs out of size budget, so the rare near-misses are padded
 
 ## Comparing bytes and grammar
 
+To run everything and get one report:
+
+```sh
+pip install matplotlib                      # optional, for coverage charts
+scripts/compare.sh --quick                  # 60 s x 1 trial: checks the setup
+nohup scripts/compare.sh > compare.log 2>&1 &   # 30 min x 3 trials, ~6 h on 4 cores
+```
+
+`compare.sh` builds the fuzzers, runs every target in every mode (the modes
+`run-matrix.sh` lists for it) in one pool of parallel runs, one per physical
+core, then replays every crash with `triage.sh` and writes
+`out/compare/<timestamp>/report.md`. Per target, the report has a table of
+crash signatures showing how many trials found each one and when, per mode,
+and the coverage summary and chart from `plot.py`. `--seconds`, `--trials`,
+`--jobs` and `--targets "circuit mdoc"` change the defaults, and it prints its
+time estimate before starting. Fuzzer logs are in `logs/`.
+
+The pieces also work on their own:
+
 ```sh
 JOBS=2 scripts/run-matrix.sh mdoc 3600 5            # 5 trials x 4 configs x 1h
 python3 scripts/plot.py out/matrix/mdoc            # coverage.png + summary table

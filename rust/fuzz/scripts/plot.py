@@ -87,7 +87,11 @@ def main():
         sys.exit(f"no stats.csv under {a.dir}")
     summary(groups)
 
-    import matplotlib
+    try:
+        import matplotlib
+    except ImportError:
+        print("\nmatplotlib not installed (pip install matplotlib); skipping the chart")
+        return
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
