@@ -13,7 +13,10 @@ Bugs found while fuzzing the Rust implementation. None are fixed yet.
   `CircuitArchive` (both LFA1 and LFA2 paths), so also through
   `decompress_circuits` and `circuit_id`.
 - **How found:** the `circuit` target in bytes mode, within about a second;
-  every crash in that run (117) had this signature.
+  every crash in that run (117) had this signature. In the circuit race
+  (below) the grammar found it at 0s in all 3 trials, seeded bytes at 1s,
+  2s and 1s, bytes from scratch at 0s, and bytes-cmplog at 167s, 120s and
+  116s.
 - **Suggested fix:** reject `nv == 0` with an error before computing `logv`.
 
 ## 2. `CborParser` recursion has no depth limit
@@ -39,7 +42,9 @@ Bugs found while fuzzing the Rust implementation. None are fixed yet.
 - **Effect:** a small archive that declares a huge payload makes the
   allocation fail and aborts the process instead of returning `Err`.
 - **How found:** code review while planning the circuit grammar, confirmed by
-  replay.
+  replay. Then found by the fuzzers in the circuit race (below): the grammar
+  at 3s, 2s and 7s, seeded bytes at 326s, 430s and 109s, bytes-cmplog at
+  184s and 1124s (missed in one trial), and never by bytes from scratch.
 - **Suggested fix:** cap `payload_len` (the reader already caps strings and
   entry counts), or read in bounded chunks and fail on EOF.
 
@@ -51,3 +56,20 @@ for `Vec::with_capacity` before any of the data is read. A tiny input can make
 the reader allocate hundreds of MB briefly before it fails on EOF. Not a
 crash, but cheap memory pressure for anything that loads untrusted circuits.
 Growing the vectors as data is actually read would avoid it.
+
+## Time to first find: circuit race
+
+`JOBS=4 scripts/run-matrix.sh circuit 1200 3`: 20 minutes, 3 trials per
+configuration, one core each, scored with `scripts/triage.sh`. Times are per
+trial; "never" means not found within the 20 minutes. The harness had no
+geometry step and no memory cap yet (NEXT.md step 3).
+
+| config | #1 zero output count | #3 LFA2 payload length | edges (median) | execs/s (median) |
+|---|---|---|---|---|
+| nautilus (no seeds) | 0s, 0s, 0s | 3s, 2s, 7s | 1236 | 883 |
+| bytes (seeded) | 1s, 2s, 1s | 326s, 430s, 109s | 1149 | 733 |
+| bytes-cmplog (seeded) | 167s, 120s, 116s | never, 184s, 1124s | 933 | 162 |
+| bytes, no seeds | 0s, 0s, 0s | never, never, never | 353 | 2717 |
+
+No run found a crash outside these two bugs. #2 is not reachable from this
+target.
