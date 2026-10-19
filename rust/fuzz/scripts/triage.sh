@@ -20,6 +20,8 @@ for f in "$dir"/*; do
     [[ -z "$sig" ]] && sig="$(grep -m1 -oE "stack overflow|memory allocation of [0-9]+ bytes failed|SIG[A-Z]+|capacity overflow" <<<"$out")"
     [[ -z "$sig" ]] && sig="exit $rc"
     [[ -n "${msg:-}" ]] && sig="$sig $msg"
+    # One allocation bug fails with a different size per input.
+    sig="$(sed -E 's/allocation of [0-9]+ bytes/allocation of N bytes/' <<<"$sig")"
   fi
   count["$sig"]=$(( ${count["$sig"]:-0} + 1 ))
   : "${example["$sig"]:=$f}"

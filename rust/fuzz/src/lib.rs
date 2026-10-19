@@ -1,5 +1,6 @@
 //! LibAFL fuzzers for longfellow-zk. See README.md.
 
+pub mod circasm;
 pub mod edn;
 pub mod fixtures;
 pub mod grammar;

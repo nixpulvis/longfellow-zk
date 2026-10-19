@@ -42,7 +42,7 @@ without instrumentation. Use a separate target dir:
 |---|---|---|---|
 | `cbor` | `CborParser::parse_exact` (host CBOR) | bytes, bytes-cmplog, nautilus | none |
 | `mdoc` | `parse_mdoc` (prover-side mdoc parsing) | bytes, bytes-cmplog, nautilus | offsets/lengths in the result stay in bounds (`src/mdoc_props.rs`) |
-| `circuit` | `CircuitArchive::from_bytes`, `CircuitReader` LFC1/LFC2 | bytes, bytes-cmplog | none |
+| `circuit` | `CircuitArchive::from_bytes` (then its `sig`/`hash` entries), `CircuitReader` LFC1/LFC2 | bytes, bytes-cmplog, nautilus | none |
 | `proof` | `MdocProof::read` with a real circuit's geometry | bytes, bytes-cmplog | accepted proofs re-encode to the same bytes (no malleability) |
 | `verify` | `run_mdoc_verifier`, fixed circuit/key/transcript/attrs | bytes, arbitrary | any accepted proof that differs from the honest one |
 
@@ -83,6 +83,22 @@ The mdoc grammar follows ISO 18013-5. It generates all 24 IssuerSignedItem
 field orders, which the circuit records as a permutation. Every structured slot
 can also fall back to an arbitrary CBOR item, and missing, duplicated and
 reordered fields appear next to the well-formed shapes.
+
+The circuit formats have the same problem in a different shape: ULEB128 and
+3-byte counts, a layer count in the header ahead of the constants, every LFA2
+payload length ahead of the first payload, an LFA2 combined ID that is a
+SHA-256 over the entry IDs, and indices that must stay below the lengths of
+the constant, delta and segment tables. The circuit grammar emits a small
+token language with labeled groups, and `src/circasm.rs` fills in counts
+(`u#L`), byte lengths (`u%P0`), hashes (`sha(*I0 *I1)`) and in-bounds
+indices (`u3~D`, 3 mod the length of `D`), each of which can be overridden.
+The grammar follows the readers in `core/proto`. Near-miss alternatives
+(wrong counts and lengths, one-past-the-end indices, out-of-range field
+elements, overlong ULEB128s, zero outputs, reader limits) are weighted so that
+about 45% of generated circuits and 40% of generated archives parse; a unit
+test holds it there. Nautilus falls back to a rule's smallest alternative when
+a subtree runs out of size budget, so the rare near-misses are padded
+(`costly()`) to keep that fallback well-formed.
 
 ## Comparing bytes and grammar
 

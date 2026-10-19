@@ -1,4 +1,5 @@
-//! Nautilus grammars that emit the EDN-like notation from [`crate::edn`].
+//! Nautilus grammars. The CBOR and mdoc grammars emit the EDN-like notation
+//! from [`crate::edn`]; the circuit grammar emits [`crate::circasm`] text.
 //!
 //! Rules are written as templates: `@NT@` references a nonterminal and
 //! everything else is literal (Nautilus's own `{`, `}` and `\` are escaped
@@ -437,6 +438,295 @@ pub fn mdoc() -> Grammar {
     g
 }
 
+/// P-256 field elements as the circuit stores them (32 bytes, little-endian).
+/// The reader rejects values >= p.
+const P256_CONSTANTS: &[&str] = &[
+    "0000000000000000000000000000000000000000000000000000000000000000", // 0
+    "0100000000000000000000000000000000000000000000000000000000000000", // 1
+    "0200000000000000000000000000000000000000000000000000000000000000", // 2
+    "feffffffffffffffffffffff00000000000000000000000001000000ffffffff", // p - 1
+    "ffffffffffffffffffffffff00000000000000000000000001000000ffffffff", // p
+    "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff", // 2^256 - 1
+];
+
+/// GF(2^128) elements (16 bytes, little-endian). Every value is valid.
+const GF2_128_CONSTANTS: &[&str] = &[
+    "00000000000000000000000000000000",
+    "01000000000000000000000000000000",
+    "02000000000000000000000000000000",
+    "ffffffffffffffffffffffffffffffff",
+];
+
+/// Circuit archive and circuit grammar for the `circuit` target. It emits
+/// [`crate::circasm`] text. The first byte selects the reader, as in the
+/// target's bytes mode: 0 for an archive, 1 for a P-256 circuit, 2 for a
+/// GF(2^128) circuit.
+///
+/// The shapes follow the readers in `core/proto`: LFA2 (header, entry table,
+/// then the payloads, with the combined ID a SHA-256 over the entry IDs), LFA1
+/// (an LFC1 P-256 circuit followed by an LFC1 GF(2^128) circuit), and LFC1 and
+/// LFC2 circuits. The assembler computes counts, lengths, the combined ID and
+/// in-bounds indices from labels, and wrong values (overrides, overlong
+/// ULEB128s, swapped or missing payloads, indices past the end) appear next to
+/// the right ones, at weights that let most generated circuits parse. Numbers
+/// favor small values and the readers' limits.
+///
+/// Labels: `K` constants, `L` layers, and per LFC2 layer `D` deltas and `S`
+/// segments. Each circuit sits in its own `C:( ... )` scope and each LFC2
+/// layer in a `Y:( ... )` scope, so these names can repeat.
+pub fn circuit() -> Grammar {
+    let mut g = Grammar::new("INPUT");
+    g.rw(4, "INPUT", "b0 @ARCHIVE@")
+        .rw(3, "INPUT", "b1 @CIRCP@")
+        .rw(3, "INPUT", "b2 @CIRCG@");
+
+    // Archives. LFA1 is the two LFC1 circuits back to back.
+    g.rw(6, "ARCHIVE", "@LFA2@")
+        .rw(2, "ARCHIVE", "@LFC1P@ @LFC1G@")
+        .r("ARCHIVE", "@LFC1P@ @LFC1G@ @JUNK@")
+        .r("ARCHIVE", "@LFC1P@")
+        .r("ARCHIVE", &costly("@JUNK@"));
+
+    g.rw(
+        8,
+        "LFA2",
+        "\"LFA2\" @AVER@ u@NUM@@PAD@ @CID@ @MSTR@ @MSTR@ @MSTR@ @MSTR@ @ENTRIES@",
+    )
+    .r("LFA2", &costly("\"LFA2\" @AVER@ u@NUM@@PAD@ @CID@ @MSTR@ @MSTR@ @MSTR@"))
+    .r("LFA2", &costly("\"LFA2\" @AVER@"));
+    g.rw(20, "AVER", "b1").r("AVER", "b@NUM@");
+    // Missing labels are empty, so this is the right ID for 0 to 3 entries.
+    g.rw(30, "CID", "sha(*I0 *I1 *I2)")
+        .r("CID", "sha(*I1 *I0)")
+        .r("CID", "sha(*I0)")
+        .r("CID", "h'@H32@'")
+        .r("CID", "h'@HEX@'");
+    g.rw(20, "MSTR", "u<\"@STR@\">")
+        .rw(10, "MSTR", "u<\"@META@\">")
+        .r("MSTR", "u<\"\\xff@STR@\">")
+        .r("MSTR", "u<\"@STR@\\xc3\">")
+        .r("MSTR", "u!@NUM@<\"@STR@\">");
+    for m in [
+        "2026-07-15T00:00:00Z",
+        "Google LLC",
+        "rzkl-compiler v0.1.0",
+        "mdoc ZK Circuit Archive",
+    ] {
+        g.r("META", m);
+    }
+
+    // The entry table, then the payloads in the same order. Each entry is a
+    // group so that the table's count counts entries, not fields.
+    g.rw(30, "ENTRIES", "u[@E0@ @E1@] @PL0@ @PL1@")
+        .r("ENTRIES", "u[@E0@] @PL0@")
+        .r("ENTRIES", "u[@E0@ @E1@ @E2@] @PL0@ @PL1@ @PL2@")
+        .r("ENTRIES", &costly("u[]"))
+        .r("ENTRIES", "u[@E0@ @E1@] @PL1@ @PL0@")
+        .r("ENTRIES", "u!@NUM@[@E0@ @E1@] @PL0@ @PL1@")
+        .r("ENTRIES", &costly("u[@E0@ @E1@] @PL0@"))
+        .r("ENTRIES", "u[@E0@ @E1@] @PL0@ @PL1@ @JUNK@");
+    g.r("E0", "(@NAME0@ I0:(@ID@) @PLEN0@)");
+    g.r("E1", "(@NAME1@ I1:(@ID@) @PLEN1@)");
+    g.r("E2", "(@ENAME@ I2:(@ID@) @PLEN2@)");
+    g.rw(20, "NAME0", "u<\"sig\">").r("NAME0", "@ENAME@");
+    g.rw(20, "NAME1", "u<\"hash\">").r("NAME1", "@ENAME@");
+    g.r("ENAME", "u<\"sig\">")
+        .r("ENAME", "u<\"hash\">")
+        .r("ENAME", "u<\"@STR@\">")
+        .r("ENAME", "u<\"sig\\x00\">")
+        .r("ENAME", "u!@NUM@<\"sig\">");
+    g.rw(20, "ID", "h'@H32@'").r("ID", "h'@HEX@'");
+    for (i, other) in [(0, 1), (1, 0), (2, 0)] {
+        let len = format!("PLEN{i}");
+        g.rw(30, &len, &format!("u%P{i}"))
+            .r(&len, &format!("u%P{i}_@SMALL@"))
+            .r(&len, &format!("u%P{other}"))
+            .r(&len, "u@NUM@");
+    }
+    g.rw(20, "PL0", "P0:(@CIRCP@)")
+        .r("PL0", "P0:(@CIRCG@)")
+        .r("PL0", &costly("P0:(@JUNK@)"));
+    g.rw(20, "PL1", "P1:(@CIRCG@)")
+        .r("PL1", "P1:(@CIRCP@)")
+        .r("PL1", &costly("P1:(@JUNK@)"));
+    g.r("PL2", "P2:(@CIRCP@)").r("PL2", "P2:(@CIRCG@)");
+
+    // Circuits. CIRCP is the P-256 ("sig") circuit, CIRCG the GF(2^128)
+    // ("hash") one; they differ in field ID and element size.
+    for (f, fid) in [("P", "FIDP"), ("G", "FIDG")] {
+        let circ = format!("CIRC{f}");
+        g.rw(20, &circ, &format!("@LFC2{f}@"))
+            .rw(8, &circ, &format!("@LFC1{f}@"))
+            .r(&circ, &costly("@JUNK@"));
+        g.r(
+            &format!("LFC2{f}"),
+            &format!("C:(@MAGIC2@ u@{fid}@@PAD@ @HDR2@ @KS2{f}@ L:(@LAYERS2@) @CIRCID@)"),
+        );
+        g.rw(16, &format!("KS2{f}"), &format!("u#K K:(@KS{f}@)"))
+            .r(&format!("KS2{f}"), &format!("u@NUM@ K:(@KS{f}@)"));
+        g.r(
+            &format!("LFC1{f}"),
+            &format!("C:(b1 t@{fid}@ @HDR1@ @KS1{f}@ L:(@LAYERS1@) @CIRCID@)"),
+        );
+        g.rw(16, &format!("KS1{f}"), &format!("t#K K:(@KS{f}@)"))
+            .r(&format!("KS1{f}"), &format!("t@NUM@ K:(@KS{f}@)"));
+        list(&mut g, &format!("KS{f}"), &format!("@K{f}@"));
+    }
+    g.rw(40, "FIDP", "1").r("FIDP", "4").r("FIDP", "@NUM@");
+    g.rw(40, "FIDG", "4").r("FIDG", "1").r("FIDG", "@NUM@");
+    // A circuit has several constants, so the invalid ones (wrong size, p and
+    // above) sit a level deeper: about 1 in 60.
+    g.rw(40, "KP", "h'@H32@'").r("KP", "@KPX@");
+    for (i, c) in P256_CONSTANTS.iter().enumerate() {
+        if i < 4 {
+            g.rw(4, "KP", &format!("h'{c}'"));
+        } else {
+            g.r("KPX", &format!("h'{c}'"));
+        }
+    }
+    g.r("KPX", "h'@HEX@'");
+    g.rw(20, "KG", "h'@H16@'").r("KG", "h'@HEX@'");
+    for c in GF2_128_CONSTANTS {
+        g.rw(4, "KG", &format!("h'{c}'"));
+    }
+    g.rw(60, "MAGIC2", "\"LFC2\"").r("MAGIC2", "\"LFC\"").r("MAGIC2", "b1");
+    g.rw(30, "CIRCID", "h'@H32@'")
+        .r("CIRCID", &costly("h'@HEX@'"))
+        .r("CIRCID", &costly(""));
+
+    // Header after the field ID: noutput, ncopies, npublic_input,
+    // subfield_boundary, ninput, layer count. LFC2 uses ULEB128 (at most 4
+    // bytes), LFC1 3-byte little-endian.
+    g.rw(16, "HDR2", "u@NOUT@@PAD@ u@NC@ u@NPUB@ u@NSUB@ u@NIN@ @NL2@")
+        .r("HDR2", "u@NOUT@ u@NC@ u@NPUB@ u@NSUB@ u@NIN@@PAD@ u#L@PAD@");
+    g.rw(20, "NL2", "u#L").r("NL2", "u@NUM@");
+    g.r("HDR1", "t@NOUT@ t@NC@ t@NPUB@ t@NSUB@ t@NIN@ @NL1@");
+    g.rw(20, "NL1", "t#L").r("NL1", "t@NUM@");
+
+    // LFC2 layer: logw, nw, then the delta table, the segments (lists of
+    // delta indices) and the tokens (segment indices).
+    list(&mut g, "LAYERS2", "@LAYER2@");
+    g.r("LAYER2", "Y:(u@LOGW@ u@NW@ @DTABLE@ @STABLE@ @TTABLE@)");
+    g.rw(30, "DTABLE", "u#D D:(@DELTAS@)").r("DTABLE", "u@NUM@ D:(@DELTAS@)");
+    g.rw(30, "STABLE", "u#S S:(@SEGS@)").r("STABLE", "u@NUM@ S:(@SEGS@)");
+    g.rw(30, "TTABLE", "u[@TOKS@]").r("TTABLE", "u!@NUM@[@TOKS@]");
+    list(&mut g, "DELTAS", "@DELTA@");
+    g.r("DELTA", "(z@SDX@ z@SDX@ z@SDX@ u@KIDX@)");
+    list(&mut g, "SEGS", "@SEG@");
+    g.rw(20, "SEG", "u[@DIDXS@]").r("SEG", "u!@NUM@[@DIDXS@]");
+    list(&mut g, "DIDXS", "u@DIDX@");
+    list(&mut g, "TOKS", "u@SIDX@");
+    // Indices into constants, deltas and segments: in bounds, one past the
+    // end, or anything. A circuit has dozens of indices, so the bad ones sit
+    // a level deeper (about 1 in 140).
+    for (nt, label) in [("KIDX", "K"), ("DIDX", "D"), ("SIDX", "S")] {
+        let good = format!("@IDX@~{label}");
+        let rare = format!("{nt}X");
+        g.rw(30, nt, &good).r(nt, &format!("@{rare}@"));
+        g.rw(7, &rare, &good)
+            .r(&rare, &format!("#{label}"))
+            .r(&rare, "@NUM@");
+    }
+
+    // LFC1 layer: logw, nw, then 12-byte terms (three deltas and a constant
+    // index).
+    list(&mut g, "LAYERS1", "@LAYER1@");
+    g.rw(20, "LAYER1", "(t@LOGW@ t@NW@ t[@TERMS1@])")
+        .r("LAYER1", "(t@LOGW@ t@NW@ t!@NUM@[@TERMS1@])");
+    list(&mut g, "TERMS1", "@TERM1@");
+    g.r("TERM1", "(s@SDX@ s@SDX@ s@SDX@ t@KIDX@)");
+
+    // Numbers. Small values dominate, so that indices usually land in bounds
+    // and dimensions stay cheap. BIG holds format and reader limits: ULEB128
+    // width boundaries, 2^24 for LFC1, MAX_WIRES (5M), MAX_LAYERS (10k),
+    // MAX_TERMS (20M), the 28-bit LFC2 cap, and 2^56 - 1 (the largest value
+    // read_uleb128 accepts).
+    g.rw(30, "NOUT", "1");
+    for v in ["2", "3", "4", "8", "@DIGNZ@@DIGS@"] {
+        g.rw(2, "NOUT", v);
+    }
+    g.r("NOUT", "0").r("NOUT", "@BIG@");
+    g.rw(40, "NC", "1").r("NC", "@NUM@");
+    // The reader requires npublic_input <= ninput; disjoint ranges keep that
+    // in the common case.
+    g.rw(4, "NPUB", "0").rw(2, "NPUB", "1").rw(2, "NPUB", "2").r("NPUB", "@NUM@");
+    g.rw(12, "NIN", "@DIGNZ@@DIG@").rw(4, "NIN", "@DIGNZ@").r("NIN", "@NUM@");
+    for nt in ["NSUB", "NW"] {
+        g.rw(12, nt, "@SMALL@").r(nt, "@NUM@");
+    }
+    for v in 0..=6 {
+        g.rw(10, "LOGW", &v.to_string());
+    }
+    for v in ["8", "16", "19", "40", "@BADLOGW@"] {
+        g.r("LOGW", v);
+    }
+    for v in ["41", "63", "64", "@BIG@"] {
+        g.r("BADLOGW", v);
+    }
+    g.rw(10, "IDX", "0").rw(4, "IDX", "1").rw(2, "IDX", "2");
+    g.r("IDX", "3").r("IDX", "@SMALL@").r("IDX", "@NUM@");
+    g.rw(6, "SD", "0").rw(4, "SD", "1").rw(4, "SD", "-1");
+    g.rw(2, "SD", "2").rw(2, "SD", "-2").rw(2, "SD", "@SMALL@").rw(2, "SD", "-@SMALL@");
+    g.r("SD", "@DIGNZ@@DIG@@DIG@").r("SD", "-@DIGNZ@@DIG@@DIG@");
+    // Deltas wrap mod 2^32 (LFC2) or 2^24 (LFC1); big LFC2 deltas don't fit
+    // the reader's 28-bit ULEB128. There are three deltas per term, so these
+    // are rare.
+    g.rw(100, "SDX", "@SD@").r("SDX", "@BIGSD@");
+    for v in [
+        "8388607", "8388608", "16777215", "134217727", "134217728", "2147483647",
+        "-2147483648", "4294967295", "-@DIGNZ@@DIGS@", "@DIGNZ@@DIGS@",
+    ] {
+        g.r("BIGSD", v);
+    }
+    for v in 0..=8 {
+        g.r("SMALL", &v.to_string());
+    }
+    g.rw(12, "NUM", "@SMALL@").rw(2, "NUM", "@DIGNZ@@DIGS@").rw(2, "NUM", "@BIG@");
+    for v in [
+        "127", "128", "255", "256", "16383", "16384", "65535", "65536", "10000", "10001",
+        "4999999", "5000000", "5000001", "16777215", "16777216", "20000000", "20000001",
+        "268435455", "268435456", "4294967295", "72057594037927935",
+    ] {
+        g.r("BIG", v);
+    }
+    g.r("DIGS", "").r("DIGS", "@DIG@@DIGS@");
+    for d in 0..10 {
+        g.r("DIG", &d.to_string());
+        if d > 0 {
+            g.r("DIGNZ", &d.to_string());
+        }
+    }
+    g.rw(100, "PAD", "").r("PAD", "_2").r("PAD", "_4").r("PAD", "_5");
+
+    g.r("JUNK", "h'@HEX@'");
+    g.r("NOP", " ");
+    g.r("HEX", "").rw(2, "HEX", "@HB@@HEX@").r("HEX", "@H32@");
+    g.regex("HB", "[0-9a-f]{2}");
+    g.regex("H16", "[0-9a-f]{32}");
+    g.regex("H32", "[0-9a-f]{64}");
+    g.r("STR", "").rw(3, "STR", "@CH@@STR@");
+    g.regex("CH", "[a-zA-Z0-9_.:\\- ]");
+    g
+}
+
+/// Nautilus only picks alternatives that fit a subtree's remaining size
+/// budget, and budgets run low deep in the tree, so generation keeps falling
+/// back to each nonterminal's smallest alternative. Padding a rare near-miss
+/// with no-op nodes makes it larger than any well-formed alternative, so the
+/// fallback stays well-formed.
+fn costly(template: &str) -> String {
+    format!("{template}{}", "@NOP@".repeat(64))
+}
+
+/// `nt` is a list of `item`: rarely empty (an empty delta or segment table
+/// puts every index into it out of bounds), otherwise one item plus a
+/// geometric tail (2.5 items on average).
+fn list(g: &mut Grammar, nt: &str, item: &str) {
+    let more = format!("{nt}MORE");
+    g.r(nt, &costly("")).rw(30, nt, &format!("{item} @{more}@"));
+    g.rw(2, &more, "").rw(3, &more, &format!("{item} @{more}@"));
+}
+
 fn permutations4() -> Vec<[usize; 4]> {
     let mut out = Vec::new();
     for a in 0..4 {
@@ -497,5 +787,145 @@ mod tests {
     #[test]
     fn mdoc_grammar_always_assembles() {
         generated_inputs_assemble(mdoc(), 1000);
+    }
+
+    #[test]
+    fn circuit_grammar_always_assembles() {
+        let ctx = circuit().context(1000);
+        let mut gen = NautilusGenerator::new(&ctx);
+        let mut state: NopState<NautilusInput> = NopState::new();
+        for _ in 0..20000 {
+            let input = gen.generate(&mut state).unwrap();
+            let mut text = Vec::new();
+            input.unparse(&ctx, &mut text);
+            assert!(
+                crate::circasm::assemble(&text).is_some(),
+                "grammar produced unassemblable text: {}",
+                String::from_utf8_lossy(&text)
+            );
+        }
+    }
+
+    #[test]
+    fn circuit_constants_are_field_boundaries() {
+        use core_algebra::SerializableField;
+        let p256 = runtime_algebra::p256::P256Field::new();
+        let ok: Vec<bool> = P256_CONSTANTS
+            .iter()
+            .map(|c| p256.bytes_to_element(&crate::circasm::assemble(format!("h'{c}'").as_bytes()).unwrap()).is_ok())
+            .collect();
+        // 0, 1, 2 and p - 1 are elements; p and 2^256 - 1 are not.
+        assert_eq!(ok, [true, true, true, true, false, false]);
+    }
+
+    /// False if an LFA2 archive declares a payload longer than the input.
+    fn lfa2_payloads_fit(data: &[u8]) -> bool {
+        fn uleb(d: &mut &[u8]) -> Option<usize> {
+            let mut v = 0usize;
+            for shift in (0..56).step_by(7) {
+                let (&b, rest) = d.split_first()?;
+                *d = rest;
+                v |= usize::from(b & 0x7f) << shift;
+                if b & 0x80 == 0 {
+                    return Some(v);
+                }
+            }
+            None
+        }
+        fn skip(d: &mut &[u8], n: usize) -> Option<()> {
+            *d = d.get(n..)?;
+            Some(())
+        }
+        let walk = || -> Option<bool> {
+            let mut d = data.strip_prefix(b"LFA2")?;
+            skip(&mut d, 1)?;
+            uleb(&mut d)?;
+            skip(&mut d, 32)?;
+            for _ in 0..4 {
+                let n = uleb(&mut d)?;
+                skip(&mut d, n)?;
+            }
+            let entries = uleb(&mut d)?.min(10_000);
+            for _ in 0..entries {
+                let n = uleb(&mut d)?;
+                skip(&mut d, n + 32)?;
+                if uleb(&mut d)? > data.len() {
+                    return Some(false);
+                }
+            }
+            Some(true)
+        };
+        walk().unwrap_or(true)
+    }
+
+    /// Generated inputs must get past the readers' header checks often enough
+    /// to be worth fuzzing with: the point of the grammar is to reach what
+    /// happens after a circuit parses.
+    #[test]
+    fn circuit_grammar_reaches_past_parsing() {
+        use core_proto::{archive::CircuitArchive, reader::CircuitReader, FieldID};
+        let p256 = runtime_algebra::p256::P256Field::new();
+        let gf2 = runtime_algebra::gf2_128::Gf2_128Field::new();
+        let ctx = circuit().context(1000);
+        let mut gen = NautilusGenerator::new(&ctx);
+        let mut state: NopState<NautilusInput> = NopState::new();
+        // ceil_log2 panics on a zero output count (FINDINGS.md #1), and the
+        // grammar generates zero on purpose. Those are caught below; keep
+        // them out of the test output.
+        let prev = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |info| {
+            if !info.to_string().contains("log2 of zero") {
+                prev(info);
+            }
+        }));
+        // [archive, P-256 circuit, GF(2^128) circuit]: (generated, parsed).
+        let mut seen = [(0usize, 0usize); 3];
+        let mut archive_circuits = 0;
+        for _ in 0..5000 {
+            let input = gen.generate(&mut state).unwrap();
+            let mut text = Vec::new();
+            input.unparse(&ctx, &mut text);
+            let bytes = crate::circasm::assemble(&text).unwrap();
+            let (&sel, rest) = bytes.split_first().unwrap();
+            // FINDINGS.md #3: the archive reader allocates whatever payload
+            // length it is given, and an allocation failure aborts. Skip
+            // those inputs; the grammar generates them on purpose.
+            if sel == 0 && !lfa2_payloads_fit(rest) {
+                continue;
+            }
+            let ok = std::panic::catch_unwind(|| match sel {
+                0 => CircuitArchive::from_bytes(rest).map(|a| {
+                    let sig = a.get("sig").map(|e| {
+                        CircuitReader::new(&p256, FieldID::P256).from_bytes(&e.payload, false).is_ok()
+                    });
+                    let hash = a.get("hash").map(|e| {
+                        CircuitReader::new(&gf2, FieldID::Gf2_128).from_bytes(&e.payload, false).is_ok()
+                    });
+                    sig == Some(true) && hash == Some(true)
+                }),
+                1 => CircuitReader::new(&p256, FieldID::P256).from_bytes(rest, false).map(|_| false),
+                _ => CircuitReader::new(&gf2, FieldID::Gf2_128).from_bytes(rest, false).map(|_| false),
+            });
+            let Ok(res) = ok else { continue };
+            let s = &mut seen[usize::from(sel)];
+            s.0 += 1;
+            if let Ok(both) = res {
+                s.1 += 1;
+                archive_circuits += usize::from(both);
+            }
+        }
+        eprintln!(
+            "(generated, parsed): archive {:?} (both circuits parse in {archive_circuits}), p256 {:?}, gf2 {:?}",
+            seen[0], seen[1], seen[2]
+        );
+        // Percent that must parse, with margin below what the grammar gets.
+        for (parsed_min, (n, parsed)) in [25, 30, 30].iter().zip(seen) {
+            assert!(parsed * 100 >= n * parsed_min, "only {parsed} of {n} parsed");
+        }
+        assert!(
+            archive_circuits * 100 >= seen[0].0 * 10,
+            "archives whose circuits parse: {archive_circuits} of {}",
+            seen[0].0
+        );
     }
 }

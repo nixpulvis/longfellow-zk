@@ -24,24 +24,25 @@ get through the parser, which is what a grammar is for.
 
 ## Steps
 
-1. **Grammar.** A Nautilus grammar for the circuit target's input, in
-   `src/grammar.rs` next to the CBOR and mdoc grammars, written the same way
-   (templates with `@NT@` references, weighted alternatives, regex rules for
-   fixed-size blobs). It should follow the archive format and the circuit
-   format inside it, so generated inputs reach past the header checks.
+1. **Grammar.** Done: `grammar::circuit` in `src/grammar.rs`. It covers
+   LFA2, LFA1, LFC1 and LFC2. About 45% of generated circuits and 40% of
+   generated archives parse (`circuit_grammar_reaches_past_parsing` checks
+   this); the rest are deliberate near-misses. Plain generation already hits
+   FINDINGS.md #1 (zero output count) and #3 (LFA2 payload length).
 
-2. **Assembler.** The format is mostly ULEB128 counts and fixed-size blobs
-   whose sizes a context-free grammar can't compute, so the grammar emits a
-   small token language and an assembler fills in the bytes. Same pattern as
-   `src/edn.rs` for mdoc. It lives in the uninstrumented library so it adds no
-   coverage of its own. A draft exists outside the repo; it needs review and
-   tests before it goes on the branch.
+2. **Assembler.** Done: `src/circasm.rs`, in the uninstrumented library.
+   Labels give counts, lengths, SHA-256 and in-bounds indices; round-trip
+   tests check its output against `CircuitWriter` and `to_bytes_lfa2`.
 
 3. **Harness.** In `src/bin/circuit.rs`:
-   - Add a `nautilus` mode (grammar plus assembler), alongside `bytes`.
+   - Done: `nautilus` mode (grammar plus assembler), alongside `bytes`.
+   - Done: an archive that parses has its `sig` and `hash` entries read as
+     circuits, as `decompress_circuits` does. This applies to bytes mode too.
    - For both modes, after a successful parse also run `compute_id` and the
      verifier's geometry step (`ZkVerifier::new(..).geometry(..)`), which is
      what the verifier does with a loaded circuit before it reads a proof.
+     The grammar keeps `npublic_input <= ninput` in the common case, which
+     `geometry` asserts.
    - Cap fuzzer memory so allocation failures become crashes in both modes,
      instead of quietly exhausting RAM. The LFA2 payload-length bug and the
      LFC2 pre-allocation issue are both allocation problems.
