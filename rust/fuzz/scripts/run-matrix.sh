@@ -13,7 +13,7 @@ target="$1"; secs="${2:-3600}"; trials="${3:-5}"; shift $(( $# < 3 ? $# : 3 ))
 modes=("$@")
 if [[ ${#modes[@]} == 0 ]]; then
   case "$target" in
-    cbor|mdoc) modes=(bytes bytes-cmplog nautilus "bytes --no-seeds") ;;
+    cbor|mdoc|circuit) modes=(bytes bytes-cmplog nautilus "bytes --no-seeds") ;;
     verify)    modes=(bytes arbitrary) ;;
     *)         modes=(bytes bytes-cmplog) ;;
   esac
