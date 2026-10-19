@@ -97,6 +97,8 @@ cache and skew executions per second.
 
 ## Findings so far
 
+See [FINDINGS.md](FINDINGS.md) for full write-ups (three bugs so far).
+
 1. **Circuit readers panic on a zero output count.** `lfc1.rs` and `lfc2.rs`
    check `noutput <= MAX_WIRES` and then call `ceil_log2(noutput)`, which
    panics on 0. A malformed circuit aborts the process instead of returning
